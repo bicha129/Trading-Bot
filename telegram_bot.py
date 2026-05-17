@@ -7,8 +7,10 @@ import time
 # TELEGRAM SETTINGS
 # =====================================
 
-BOT_TOKEN = "8781841318:AAFB8-k5C9KerLcb7q3XX2BsSGZ_C_ueO_4"
-CHAT_ID = "8613300513"
+import os
+
+BOT_TOKEN = os.getenv("8781841318:AAFB8-k5C9KerLcb7q3XX2BsSGZ_C_ueO_4")
+CHAT_ID = os.getenv("8613300513")
 
 # =====================================
 # SETTINGS
@@ -214,3 +216,4 @@ HMA Length: {hma_length}
     # WAIT 60 SECONDS
 
     time.sleep(60)
+    
