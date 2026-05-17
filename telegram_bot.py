@@ -2,31 +2,59 @@ import yfinance as yf
 import pandas as pd
 import requests
 import time
+import os
 
 # =====================================
 # TELEGRAM SETTINGS
 # =====================================
 
-import os
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
-BOT_TOKEN = os.getenv("8781841318:AAFB8-k5C9KerLcb7q3XX2BsSGZ_C_ueO_4")
-CHAT_ID = os.getenv("8613300513")
+# =====================================
+# ASSET LISTS
+# =====================================
+
+forex_pairs = [
+    "GBPUSD=X",
+    "EURUSD=X",
+    "JPY=X",
+    "AUDUSD=X",
+    "USDCAD=X"
+]
+
+stocks = [
+    "AAPL",
+    "TSLA",
+    "NVDA",
+    "MSFT",
+    "AMZN"
+]
+
+indices = [
+    "^GSPC",
+    "^NDX",
+    "^DJI"
+]
+
+symbols = forex_pairs + stocks + indices
 
 # =====================================
 # SETTINGS
 # =====================================
 
-symbol = "GBPUSD=X"
-timeframe = "15m"
+lower_timeframe = "15m"
+higher_timeframe = "4h"
+
 hma_length = 55
 atr_length = 14
 risk_reward = 3
 
 # =====================================
-# MEMORY
+# SIGNAL MEMORY
 # =====================================
 
-last_signal = None
+last_signals = {}
 
 # =====================================
 # WMA FUNCTION
@@ -87,133 +115,175 @@ while True:
 
     try:
 
-        # DOWNLOAD DATA
+        for symbol in symbols:
 
-        data = yf.download(
-            symbol,
-            interval=timeframe,
-            period="5d",
-            progress=False
-        )
+            print(f"Checking {symbol}...")
 
-        df = data.copy()
+            # =====================================
+            # HIGHER TIMEFRAME DATA
+            # =====================================
 
-        # FIX MULTI INDEX
+            htf_data = yf.download(
+                symbol,
+                interval=higher_timeframe,
+                period="30d",
+                progress=False
+            )
 
-        df.columns = df.columns.get_level_values(0)
+            htf = htf_data.copy()
 
-        # =====================================
-        # INDICATORS
-        # =====================================
+            if htf.empty:
+                print(f"No HTF data for {symbol}")
+                continue
 
-        df['HMA'] = HMA(df['Close'], hma_length)
-        df['ATR'] = ATR(df, atr_length)
+            htf.columns = htf.columns.get_level_values(0)
 
-        # =====================================
-        # SIGNALS
-        # =====================================
+            # =====================================
+            # LOWER TIMEFRAME DATA
+            # =====================================
 
-        df['Bullish'] = df['HMA'] > df['HMA'].shift(1)
+            data = yf.download(
+                symbol,
+                interval=lower_timeframe,
+                period="5d",
+                progress=False
+            )
 
-        df['BuySignal'] = (
-            (df['Bullish'] == True) &
-            (df['Bullish'].shift(1) == False)
-        )
+            df = data.copy()
 
-        df['SellSignal'] = (
-            (df['Bullish'] == False) &
-            (df['Bullish'].shift(1) == True)
-        )
+            if df.empty:
+                print(f"No LTF data for {symbol}")
+                continue
 
-        latest = df.iloc[-1].to_dict()
+            df.columns = df.columns.get_level_values(0)
 
-        message = None
-        current_signal = None
+            # =====================================
+            # INDICATORS
+            # =====================================
 
-        # =====================================
-        # BUY SIGNAL
-        # =====================================
+            df['HMA'] = HMA(df['Close'], hma_length)
+            htf['HMA'] = HMA(htf['Close'], hma_length)
 
-        if latest['BuySignal']:
+            df['ATR'] = ATR(df, atr_length)
 
-            current_signal = 'BUY'
+            # =====================================
+            # TREND DIRECTION
+            # =====================================
 
-            entry = latest['Close']
-            sl = entry - latest['ATR']
-            risk = entry - sl
-            tp = entry + (risk * risk_reward)
+            df['Bullish'] = df['HMA'] > df['HMA'].shift(1)
+            htf['Bullish'] = htf['HMA'] > htf['HMA'].shift(1)
 
-            message = f"""
+            # =====================================
+            # SIGNAL GENERATION
+            # =====================================
+
+            df['BuySignal'] = (
+                (df['Bullish'] == True) &
+                (df['Bullish'].shift(1) == False)
+            )
+
+            df['SellSignal'] = (
+                (df['Bullish'] == False) &
+                (df['Bullish'].shift(1) == True)
+            )
+
+            latest = df.iloc[-1].to_dict()
+            htf_latest = htf.iloc[-1].to_dict()
+
+            message = None
+            current_signal = None
+
+            # =====================================
+            # BUY SIGNAL
+            # =====================================
+
+            if latest['BuySignal'] and htf_latest['Bullish']:
+
+                current_signal = 'BUY'
+
+                entry = latest['Close']
+                sl = entry - latest['ATR']
+
+                risk = entry - sl
+
+                tp = entry + (risk * risk_reward)
+
+                message = f"""
 BUY SIGNAL ✅
 
-Pair: GBP/USD
-Timeframe: 15m
+Asset: {symbol}
+Timeframe: {lower_timeframe}
+Higher Trend: Bullish
 
 Entry: {round(entry, 5)}
 Stop Loss: {round(sl, 5)}
 Take Profit: {round(tp, 5)}
 
 Risk Reward: 1:{risk_reward}
-Trend: Bullish
 HMA Length: {hma_length}
 """
 
-        # =====================================
-        # SELL SIGNAL
-        # =====================================
+            # =====================================
+            # SELL SIGNAL
+            # =====================================
 
-        if latest['SellSignal']:
+            if latest['SellSignal'] and not htf_latest['Bullish']:
 
-            current_signal = 'SELL'
+                current_signal = 'SELL'
 
-            entry = latest['Close']
-            sl = entry + latest['ATR']
-            risk = sl - entry
-            tp = entry - (risk * risk_reward)
+                entry = latest['Close']
+                sl = entry + latest['ATR']
 
-            message = f"""
+                risk = sl - entry
+
+                tp = entry - (risk * risk_reward)
+
+                message = f"""
 SELL SIGNAL 🔻
 
-Pair: GBP/USD
-Timeframe: 15m
+Asset: {symbol}
+Timeframe: {lower_timeframe}
+Higher Trend: Bearish
 
 Entry: {round(entry, 5)}
 Stop Loss: {round(sl, 5)}
 Take Profit: {round(tp, 5)}
 
 Risk Reward: 1:{risk_reward}
-Trend: Bearish
 HMA Length: {hma_length}
 """
 
-        # =====================================
-        # SEND TELEGRAM ALERT
-        # =====================================
+            # =====================================
+            # TELEGRAM ALERT
+            # =====================================
 
-        if message and current_signal != last_signal:
+            if message and last_signals.get(symbol) != current_signal:
 
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+                url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-            payload = {
-                "chat_id": CHAT_ID,
-                "text": message
-            }
+                payload = {
+                    "chat_id": CHAT_ID,
+                    "text": message
+                }
 
-            response = requests.post(url, data=payload)
+                response = requests.post(url, data=payload)
 
-            print(message)
+                print(message)
 
-            last_signal = current_signal
+                last_signals[symbol] = current_signal
 
-        else:
+            else:
 
-            print("No new signal.")
+                print(f"No new signal for {symbol}")
 
     except Exception as e:
 
         print("Error:", e)
 
-    # WAIT 60 SECONDS
+    # =====================================
+    # WAIT BEFORE NEXT SCAN
+    # =====================================
+
+    print("Waiting 60 seconds...")
 
     time.sleep(60)
-    
